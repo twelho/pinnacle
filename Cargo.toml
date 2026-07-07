@@ -1,0 +1,25 @@
+[package]
+name = "pinnacle"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "pinnacle"
+path = "src/main.rs"
+
+[features]
+# Record pinnacle's PCR extend in the TPM event log, for inspection with
+# `tpm2_eventlog`. Off by default to keep the PIN measurement out of the event
+# log as least disclosure, not a security boundary, since the PCR value it
+# produces is itself world-readable.
+debug-event-log = []
+
+[dependencies]
+uefi = { version = "0.38", features = ["alloc", "global_allocator", "panic_handler"] }
+argon2 = { version = "0.5", default-features = false, features = ["alloc", "zeroize"] }
+zeroize = { version = "1", default-features = false, features = ["alloc"] }
+
+[profile.release]
+opt-level = "s"
+lto = true
+panic = "abort"

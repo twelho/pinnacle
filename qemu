@@ -1,0 +1,156 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+find_ovmf_pair() {
+	if [[ -n ${PINNACLE_OVMF_CODE:-} && -n ${PINNACLE_OVMF_VARS:-} ]]; then
+		printf '%s\n%s\n' "$PINNACLE_OVMF_CODE" "$PINNACLE_OVMF_VARS"
+		return 0
+	fi
+
+	if [[ -n ${PINNACLE_OVMF_DIR:-} ]]; then
+		for pair in \
+			"$PINNACLE_OVMF_DIR/OVMF_CODE.fd|$PINNACLE_OVMF_DIR/OVMF_VARS.fd" \
+			"$PINNACLE_OVMF_DIR/OVMF_CODE_4M.fd|$PINNACLE_OVMF_DIR/OVMF_VARS_4M.fd" \
+			"$PINNACLE_OVMF_DIR/OVMF_CODE.4m.fd|$PINNACLE_OVMF_DIR/OVMF_VARS.4m.fd"
+		do
+			IFS='|' read -r code vars <<<"$pair"
+			if [[ -r $code && -r $vars ]]; then
+				printf '%s\n%s\n' "$code" "$vars"
+				return 0
+			fi
+		done
+	fi
+
+	for pair in \
+		"/usr/share/OVMF/OVMF_CODE.fd|/usr/share/OVMF/OVMF_VARS.fd" \
+		"/usr/share/OVMF/OVMF_CODE_4M.fd|/usr/share/OVMF/OVMF_VARS_4M.fd" \
+		"/usr/share/edk2/ovmf/OVMF_CODE.fd|/usr/share/edk2/ovmf/OVMF_VARS.fd" \
+		"/usr/share/edk2/ovmf/OVMF_CODE_4M.fd|/usr/share/edk2/ovmf/OVMF_VARS_4M.fd" \
+		"/usr/share/edk2/x64/OVMF_CODE.fd|/usr/share/edk2/x64/OVMF_VARS.fd" \
+		"/usr/share/edk2/x64/OVMF_CODE.4m.fd|/usr/share/edk2/x64/OVMF_VARS.4m.fd"
+	do
+		IFS='|' read -r code vars <<<"$pair"
+		if [[ -r $code && -r $vars ]]; then
+			printf '%s\n%s\n' "$code" "$vars"
+			return 0
+		fi
+	done
+
+	return 1
+}
+
+find_next_loader() {
+	if [[ -n ${PINNACLE_NEXT_LOADER:-} ]]; then
+		printf '%s\n' "$PINNACLE_NEXT_LOADER"
+		return 0
+	fi
+
+	for path in \
+		"/usr/share/edk2-shell/x64/Shell.efi" \
+		"/usr/share/edk2-shell/x64/Shell_Full.efi" \
+		"/usr/share/edk2/ovmf/Shell.efi" \
+		"/usr/share/edk2/x64/Shell.efi" \
+		"/usr/share/OVMF/Shell.efi"
+	do
+		if [[ -r $path ]]; then
+			printf '%s\n' "$path"
+			return 0
+		fi
+	done
+
+	return 1
+}
+
+missing=()
+for cmd in cargo mformat mmd mcopy swtpm qemu-system-x86_64; do
+	if ! command -v "$cmd" >/dev/null 2>&1; then
+		missing+=("$cmd")
+	fi
+done
+
+if (( ${#missing[@]} > 0 )) && [[ -z ${PINNACLE_NO_NIX:-} ]] && command -v nix >/dev/null 2>&1; then
+	ovmf_dir=$(nix build --no-link --print-out-paths nixpkgs#OVMFFull.fd)/FV
+	next_loader=$(nix build --no-link --print-out-paths nixpkgs#edk2-uefi-shell)/shell.efi
+	exec nix shell nixpkgs#qemu nixpkgs#swtpm nixpkgs#mtools \
+		-c env \
+			PINNACLE_NO_NIX=1 \
+			PINNACLE_OVMF_DIR="$ovmf_dir" \
+			PINNACLE_NEXT_LOADER="$next_loader" \
+			"$0" "$@"
+fi
+
+if (( ${#missing[@]} > 0 )); then
+	printf 'error: missing required command(s): %s\n' "${missing[*]}" >&2
+	printf 'install qemu, swtpm, mtools, and Rust/Cargo, or run with nix available\n' >&2
+	exit 1
+fi
+
+if ! mapfile -t ovmf < <(find_ovmf_pair); then
+	if [[ -z ${PINNACLE_NO_NIX:-} ]] && command -v nix >/dev/null 2>&1; then
+		PINNACLE_OVMF_DIR=$(nix build --no-link --print-out-paths nixpkgs#OVMFFull.fd)/FV
+		export PINNACLE_OVMF_DIR
+	fi
+	if ! mapfile -t ovmf < <(find_ovmf_pair); then
+		cat >&2 <<'EOF'
+error: could not find OVMF firmware files
+set PINNACLE_OVMF_DIR, or set PINNACLE_OVMF_CODE and PINNACLE_OVMF_VARS
+EOF
+		exit 1
+	fi
+fi
+ovmf_code=${ovmf[0]}
+ovmf_vars=${ovmf[1]}
+
+if ! next_loader=$(find_next_loader); then
+	if [[ -z ${PINNACLE_NO_NIX:-} ]] && command -v nix >/dev/null 2>&1; then
+		PINNACLE_NEXT_LOADER=$(nix build --no-link --print-out-paths nixpkgs#edk2-uefi-shell)/shell.efi
+		export PINNACLE_NEXT_LOADER
+	fi
+	if ! next_loader=$(find_next_loader); then
+		cat >&2 <<'EOF'
+error: could not find a UEFI shell or next-loader image
+set PINNACLE_NEXT_LOADER to any x86_64 EFI binary to place at \EFI\boot\BOOTX64.efi on the second disk
+EOF
+		exit 1
+	fi
+fi
+
+cargo build --release
+
+_dir=$(mktemp -d)
+trap 'kill "${_swtpm:-}" 2>/dev/null || true; rm -rf "$_dir"' EXIT
+
+mformat -i "$_dir/esp.img" -C -T 131072 ::
+mmd -i "$_dir/esp.img" ::/EFI ::/EFI/BOOT
+mcopy -i "$_dir/esp.img" \
+	target/x86_64-unknown-uefi/release/pinnacle.efi ::/EFI/BOOT/BOOTX64.EFI
+
+mformat -i "$_dir/next.img" -C -T 131072 ::
+mmd -i "$_dir/next.img" ::/EFI ::/EFI/BOOT
+mcopy -i "$_dir/next.img" "$next_loader" ::/EFI/BOOT/BOOTX64.EFI
+
+install -m600 "$ovmf_vars" "$_dir/vars.fd"
+
+mkdir "$_dir/tpm"
+swtpm socket --tpm2 --tpmstate dir="$_dir/tpm" \
+	--ctrl type=unixio,path="$_dir/tpm.sock" --terminate &
+_swtpm=$!
+while [ ! -S "$_dir/tpm.sock" ]; do sleep 0.1; done
+
+qemu-system-x86_64 \
+	-machine q35,accel=kvm:tcg \
+	-m 512 \
+	-no-reboot \
+	-drive if=pflash,format=raw,readonly=on,file="$ovmf_code" \
+	-drive if=pflash,format=raw,file="$_dir/vars.fd" \
+	-drive if=none,id=esp,format=raw,file="$_dir/esp.img" \
+	-device virtio-blk-pci,drive=esp,bootindex=0 \
+	-drive if=none,id=next,format=raw,file="$_dir/next.img" \
+	-device virtio-blk-pci,drive=next,bootindex=1 \
+	-chardev socket,id=chrtpm,path="$_dir/tpm.sock" \
+	-tpmdev emulator,id=tpm0,chardev=chrtpm \
+	-device tpm-tis,tpmdev=tpm0 \
+	-display none \
+	-chardev stdio,id=con,mux=on,logfile=qemu-serial.log \
+	-serial chardev:con \
+	-mon chardev=con
