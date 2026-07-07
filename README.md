@@ -121,7 +121,12 @@ efibootmgr --create --disk /dev/sda --part 1 \
   --loader '\EFI\pinnacle\pinnacle.efi' --label pinnacle
 ```
 
-Order the firmware boot entries so pinnacle's partition is tried first. pinnacle and every image it leads to must be signed by your `db` key for Secure Boot to load them. `NEXT_LOADER_PATH` defaults to `\EFI\boot\BOOTX64.efi`, the removable-media path used by systemd-boot, shim, and most loaders; a loader at a different path is supported by editing that one `const`.
+Order the firmware boot entries so pinnacle's partition is tried first.
+
+> [!TIP]
+> On machines whose firmware insists on preferring "Windows Boot Manager", another practical trick is to place the signed pinnacle image at `\EFI\Microsoft\Boot\bootmgfw.efi` on the pinnacle ESP and use that as the firmware-facing boot path. This only works around firmware boot-order behavior; pinnacle still chainloads `NEXT_LOADER_PATH` from the other volumes as usual. Do not overwrite a real Windows boot manager unless that is intentional and you have a backup. Also note that Windows might overwrite the `bootmgfw.efi` paths on upgrade if it feels like it.
+
+pinnacle and every image it leads to must be signed by your `db` key for Secure Boot to load them. `NEXT_LOADER_PATH` defaults to `\EFI\boot\BOOTX64.efi`, the removable-media path used by systemd-boot, shim, and most loaders; a loader at a different path is supported by editing that one `const`.
 
 ## Verify after booting Linux
 
