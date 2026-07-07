@@ -102,7 +102,7 @@ fn run() -> Outcome {
     info!("starting {}...", NEXT_LOADER_PATH);
 
     // Wait for a bit to ensure the final log messages can be read.
-    boot::stall(Duration::from_secs(5));
+    boot::stall(Duration::from_secs(3));
     boot::start_image(next).map_err(Into::into)
 }
 
