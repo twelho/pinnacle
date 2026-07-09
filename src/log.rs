@@ -78,7 +78,7 @@ impl Level {
             Level::Error => Color::LightRed,
             Level::Warn => Color::Yellow,
             Level::Info => Color::LightGreen,
-            Level::Debug => Color::DarkGray,
+            Level::Debug => Color::Cyan,
         }
     }
 }
