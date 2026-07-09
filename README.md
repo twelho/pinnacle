@@ -126,7 +126,10 @@ Order the firmware boot entries so pinnacle's partition is tried first.
 > [!TIP]
 > On machines whose firmware insists on preferring "Windows Boot Manager", another practical trick is to place the signed pinnacle image at `\EFI\Microsoft\Boot\bootmgfw.efi` on the pinnacle ESP and use that as the firmware-facing boot path. This only works around firmware boot-order behavior; pinnacle still chainloads `NEXT_LOADER_PATH` from the other volumes as usual. Do not overwrite a real Windows boot manager unless that is intentional and you have a backup. Also note that Windows might overwrite the `bootmgfw.efi` paths on upgrade if it feels like it.
 
-pinnacle and every image it leads to must be signed by your `db` key for Secure Boot to load them. `NEXT_LOADER_PATH` defaults to `\EFI\boot\BOOTX64.efi`, the removable-media path used by systemd-boot, shim, and most loaders; a loader at a different path is supported by editing that one `const`.
+pinnacle and every image it leads to must be signed by your `db` key for Secure Boot to load them. `NEXT_LOADER_PATH` defaults to `\EFI\boot\BOOTX64.efi`, the removable-media path, and is changed by editing that one `const`.
+
+> [!IMPORTANT]
+> `shim` (used by most Secure Boot distributions) treats being launched from the removable-media path `\EFI\boot\BOOTX64.efi` as a first-boot signal and runs `fbx64.efi`, which recreates the firmware boot entries and reboots ("Reset System") instead of chainloading GRUB. So point `NEXT_LOADER_PATH` at the *installed* loader, such as `\EFI\ubuntu\shimx64.efi`, which keeps the Secure Boot chain and hands off to GRUB normally because shim launched from there is not a removable path, or `\EFI\ubuntu\grubx64.efi` to skip shim entirely (Secure Boot off only, as GRUB is not signed for `db`). Self-contained loaders like systemd-boot have no such behavior and chainload fine from the removable path.
 
 ## Verify after booting Linux
 
