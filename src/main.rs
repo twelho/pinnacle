@@ -89,6 +89,18 @@ fn main() -> Status {
 }
 
 fn run() -> Outcome {
+    let next = prepare()?;
+
+    info!("starting {}...", NEXT_LOADER_PATH);
+
+    // Wait for a bit to ensure the final log messages can be read.
+    boot::stall(Duration::from_secs(3));
+    boot::start_image(next).map_err(Into::into)
+}
+
+/// Main pinnacle logic, this lives in a separate scope to make sure everything
+/// that is not needed for chainloading is dropped before diverging.
+fn prepare() -> Outcome<Handle> {
     // Everything that can fail runs before the prompt.
     let mut tcg = open_tpm()?;
     pcr::assert_clean(&mut tcg)?;
@@ -97,13 +109,7 @@ fn run() -> Outcome {
     let salt = pin_salt(uuid.as_ref());
     let pin = read_pin()?;
     extend_pin_to_pcr(&mut tcg, salt, &pin)?;
-    drop(pin);
-
-    info!("starting {}...", NEXT_LOADER_PATH);
-
-    // Wait for a bit to ensure the final log messages can be read.
-    boot::stall(Duration::from_secs(3));
-    boot::start_image(next).map_err(Into::into)
+    Ok(next)
 }
 
 /// Acquire the TCG2 protocol and verify the TPM is present with an active
