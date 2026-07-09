@@ -67,7 +67,7 @@ const FALLBACK_SALT: &[u8] = b"pinnacle-of-engineering";
 /// Argon2id cost parameters: memory in KiB, passes, and lanes (1, as UEFI is
 /// single-threaded).
 const ARGON2_MEM_KIB: u32 = 64 * 1024;
-const ARGON2_TIME: u32 = 64;
+const ARGON2_TIME: u32 = 32;
 const ARGON2_LANES: u32 = 1;
 
 /// Length of the derived Argon2id key extended into the PCR. Matches SHA-256.
@@ -282,7 +282,7 @@ fn derive_pin_hash(salt: &[u8], pin: &[u16]) -> Outcome<Scrubbed<u8>> {
 
 /// The Argon2id salt for this machine: the SMBIOS system UUID when present,
 /// else `FALLBACK_SALT` (see the README).
-fn pin_salt<'a>(uuid: Option<&'a [u8; 16]>) -> &'a [u8] {
+fn pin_salt(uuid: Option<&[u8; 16]>) -> &[u8] {
     match uuid {
         Some(u) => debug!("SMBIOS system UUID: {}", Hex(u)),
         None => error!("SMBIOS system UUID: <read failed>"),

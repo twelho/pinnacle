@@ -17,7 +17,7 @@ Default behavior:
 - PCR: `15`
 - next image: `\EFI\boot\BOOTX64.efi` (the removable-media path)
 - event log: no entry by default (extend-only)
-- Argon2id: 64 MiB memory, 64 passes, 1 lane, 32-byte output
+- Argon2id: 64 MiB memory, 32 passes, 1 lane, 32-byte output
 
 These are `const`s at the top of `src/main.rs`. The measured bytes carry no pinnacle version and do not include `NEXT_LOADER_PATH`, so upgrading pinnacle or retargeting the chainload does **not** move the PCR. Chainloading a stable removable path rather than a versioned image keeps it stable across kernel and loader upgrades too.
 
@@ -151,7 +151,7 @@ By default that feature is off, so pinnacle's extend is not recorded in the even
 
 pinnacle adds a PIN factor by extending it into a PCR that, for example, disk encryption is then sealed to. Binding to an arbitrary PCR is the only lever available without OS support for a TPM PIN (authValue), but it has hard limits worth understanding:
 
-- **No dictionary-attack lockout.** TPM objects sealed to a PCR policy get no TPM lockout; that only applies to authValue-based auth, which is not used here. Guessing is limited only by how fast an attacker can drive the TPM through a reset + extend + unseal cycle, or crack the PIN offline from an observed PCR value. The Argon2id pass raises the per-guess cost from a single SHA-256 to a memory-hard and compute-hard hash (64 MiB, 64 passes, GPU/ASIC-resistant) and the salt defeats precomputed tables, but a *low-entropy* PIN is still crackable given enough attacker compute. **PIN entropy remains the actual defense: treat it as a passphrase, not a numeric PIN.**
+- **No dictionary-attack lockout.** TPM objects sealed to a PCR policy get no TPM lockout; that only applies to authValue-based auth, which is not used here. Guessing is limited only by how fast an attacker can drive the TPM through a reset + extend + unseal cycle, or crack the PIN offline from an observed PCR value. The Argon2id pass raises the per-guess cost from a single SHA-256 to a memory-hard and compute-hard hash (64 MiB, 32 passes, GPU/ASIC-resistant) and the salt defeats precomputed tables, but a *low-entropy* PIN is still crackable given enough attacker compute. **PIN entropy remains the actual defense: treat it as a passphrase, not a numeric PIN.**
 - **TPM bus sniffing.** On a discrete (SPI/LPC) TPM the unsealed key crosses the bus in the clear once the correct PIN reproduces the PCR; the PIN does not protect against an interposer/sniffer. Prefer a firmware TPM (fTPM).
 - **Evil-maid resistance requires enforced Secure Boot.** To prevent an attacker from replacing pinnacle with a PIN stealer, pinnacle must be signed by a key you control and Secure Boot must be enabled and enforced. The chainloaded boot loader must also be signed. This is intentional: pinnacle is not `shim` and does not perform its own image validation. It asks firmware to load the next image, so the normal firmware Secure Boot policy verifies the next boot loader during `LoadImage`.
 - **Lock the firmware.** Set a firmware admin password and lock the Secure Boot configuration so an attacker cannot disable Secure Boot or enroll their own keys to run PIN-stealing or brute-force tooling.
