@@ -123,6 +123,8 @@ efibootmgr --create --disk /dev/sda --part 1 \
 
 Order the firmware boot entries so pinnacle's partition is tried first.
 
+pinnacle also registers a `pinnacle` boot entry for its own image and, if it is not already first, moves that entry to the front of `BootOrder`. This enables self-healing with a single launch override whenever the OS or firmware reshuffles the boot order (Windows and `fwupd` are prone to this). Any stale/duplicate `pinnacle` entries (e.g. left by an install-time removable device) are pruned so the boot menu does not accumulate them. NVRAM is written only when something actually changed, never when pinnacle is already first and alone. This sets the *default* boot entry, not an enforced one: the firmware boot menu can still launch any other entry, so it is a convenience, not a security boundary (see the [security model](#security-model-and-limits)).
+
 > [!TIP]
 > On machines whose firmware insists on preferring "Windows Boot Manager", another practical trick is to place the signed pinnacle image at `\EFI\Microsoft\Boot\bootmgfw.efi` on the pinnacle ESP and use that as the firmware-facing boot path. This only works around firmware boot-order behavior; pinnacle still chainloads `NEXT_LOADER_PATH` from the other volumes as usual. Do not overwrite a real Windows boot manager unless that is intentional and you have a backup. Also note that Windows might overwrite the `bootmgfw.efi` paths on upgrade if it feels like it.
 

@@ -17,10 +17,11 @@ extern crate alloc;
 mod input;
 #[macro_use]
 mod log;
+mod bootorder;
 mod pcr;
 
+use alloc::boxed::Box;
 use alloc::format;
-use alloc::string::String;
 use alloc::vec::Vec;
 use core::time::Duration;
 use zeroize::Zeroizing;
@@ -105,6 +106,7 @@ fn prepare() -> Outcome<Handle> {
     let mut tcg = open_tpm()?;
     pcr::assert_clean(&mut tcg)?;
     let next = load_next()?;
+    bootorder::ensure_first();
     let uuid = read_smbios_uuid();
     let salt = pin_salt(uuid.as_ref());
     let pin = read_pin()?;
@@ -370,28 +372,64 @@ fn locate_smbios() -> Option<(usize, usize)> {
     })
 }
 
+/// Open pinnacle's own loaded-image protocol and run `f` with it.
+pub(crate) fn with_own_image<T>(f: impl FnOnce(&LoadedImage) -> T) -> uefi::Result<T> {
+    let loaded = boot::open_protocol_exclusive::<LoadedImage>(boot::image_handle())?;
+    Ok(f(&loaded))
+}
+
+/// Join a `device`'s own path with a `file` path within it into the full
+/// device path to that file.
+pub(crate) fn join_device_path(
+    device: &DevicePath,
+    file: &DevicePath,
+) -> uefi::Result<Box<DevicePath>> {
+    let mut buf = Vec::new();
+    let mut builder = DevicePathBuilder::with_vec(&mut buf);
+    for node in device.node_iter().chain(file.node_iter()) {
+        builder = builder.push(&node).map_err(|_| Status::OUT_OF_RESOURCES)?;
+    }
+    let full = builder.finalize().map_err(|_| Status::OUT_OF_RESOURCES)?;
+    Ok(full.to_boxed())
+}
+
 /// Locate `NEXT_LOADER_PATH` across all filesystem volumes and load it
 /// (running the Secure Boot check for it), returning the ready-to-start image.
 /// pinnacle's own volume is tried last.
 fn load_next() -> Outcome<Handle> {
     let image = boot::image_handle();
-    let own = boot::open_protocol_exclusive::<LoadedImage>(image)?.device();
+    let own = with_own_image(|loaded| loaded.device())?;
+
+    // Build the NEXT_LOADER_PATH file path once, reused for every volume.
+    let mut file_buf = Vec::new();
+    let file = DevicePathBuilder::with_vec(&mut file_buf)
+        .push(&FilePath {
+            path_name: NEXT_LOADER_PATH,
+        })
+        .and_then(DevicePathBuilder::finalize)
+        .map_err(|_| Status::OUT_OF_RESOURCES)?;
 
     info!("searching for {}...", NEXT_LOADER_PATH);
     let mut volumes = boot::find_handles::<SimpleFileSystem>()?;
     volumes.sort_by_key(|handle| Some(*handle) == own);
 
     for volume in volumes {
-        let loader_path = loader_path_on_volume(volume);
-        match load_from_volume(volume, image) {
+        let Some(path) = loader_path_on_volume(volume, file) else {
+            continue; // volume without a readable device path, skip
+        };
+        match boot::load_image(
+            image,
+            boot::LoadImageSource::FromDevicePath {
+                device_path: &path,
+                boot_policy: BootPolicy::ExactMatch,
+            },
+        ) {
             Ok(next) => {
-                info!("loaded {loader_path}");
+                info!("loaded {path}");
                 return Ok(next);
             }
             Err(error) if error.status() == Status::NOT_FOUND => {} // not found, next
-            Err(error) => {
-                error!("{loader_path} load failed: {error}");
-            }
+            Err(error) => error!("{path} load failed: {error}"),
         }
     }
 
@@ -401,35 +439,9 @@ fn load_next() -> Outcome<Handle> {
     )
 }
 
-/// Best-effort printable full path of `NEXT_LOADER_PATH` on `volume`.
-fn loader_path_on_volume(volume: Handle) -> String {
-    match boot::open_protocol_exclusive::<DevicePath>(volume) {
-        Ok(device_path) => format!("{device_path}{NEXT_LOADER_PATH}"),
-        Err(_) => format!("{volume:?}{NEXT_LOADER_PATH}"),
-    }
-}
-
-/// Load `NEXT_LOADER_PATH` from a single filesystem volume.
-fn load_from_volume(volume: Handle, parent: Handle) -> uefi::Result<Handle> {
-    let device_path = boot::open_protocol_exclusive::<DevicePath>(volume)?;
-
-    let mut buf = Vec::new();
-    let mut builder = DevicePathBuilder::with_vec(&mut buf);
-    for node in device_path.node_iter() {
-        builder = builder.push(&node).map_err(|_| Status::OUT_OF_RESOURCES)?;
-    }
-    let full_path = builder
-        .push(&FilePath {
-            path_name: NEXT_LOADER_PATH,
-        })
-        .and_then(DevicePathBuilder::finalize)
-        .map_err(|_| Status::OUT_OF_RESOURCES)?;
-
-    boot::load_image(
-        parent,
-        boot::LoadImageSource::FromDevicePath {
-            device_path: full_path,
-            boot_policy: BootPolicy::ExactMatch,
-        },
-    )
+/// The full path to `file` on `volume`, or `None` if the volume's device path
+/// cannot be read.
+fn loader_path_on_volume(volume: Handle, file: &DevicePath) -> Option<Box<DevicePath>> {
+    let device = boot::open_protocol_exclusive::<DevicePath>(volume).ok()?;
+    join_device_path(&device, file).ok()
 }
