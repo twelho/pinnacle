@@ -148,7 +148,7 @@ fn open_tpm() -> Outcome<boot::ScopedProtocol<Tcg>> {
 /// Read a PIN with echo masked by `*`. Returns the entered UEFI CHAR16
 /// (UCS-2/UTF-16) code units.
 fn read_pin() -> Outcome<Scrubbed<u16>> {
-    info!("press ESC at the PIN prompt to abort");
+    info!("press Ctrl+U to clear the PIN, ESC to abort");
 
     let prompt = format!("enter PIN to extend PCR[{}]: ", PIN_PCR_INDEX);
     prompt!("{prompt}");
@@ -192,6 +192,14 @@ fn read_pin() -> Outcome<Scrubbed<u16>> {
                         // Yes, this does what you expect.
                         print!("\u{8} \u{8}");
                     }
+                }
+                // Ctrl+U clears the whole entry, as it does in a terminal.
+                0x15 => {
+                    for _ in 0..pin.len() {
+                        print!("\u{8} \u{8}");
+                    }
+                    pin.iter_mut().for_each(|unit| *unit = 0);
+                    pin.clear();
                 }
                 code if code >= 0x20 && pin.len() < MAX_PIN_CHARS => {
                     pin.push(code);
